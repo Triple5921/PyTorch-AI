@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import ollama
+# REMOVED OLLAMA IMPORT
 import streamlit as st
 import plotly.graph_objects as go
 import numpy as np
@@ -10,6 +10,7 @@ import os
 import re
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 # --- 1. CONFIGURATION ---
 MEMORY_FILE = "marin_organic_mem.json"
@@ -18,9 +19,34 @@ PERSONALITY_FILE = "Personality.txt"
 DIALOG_FILE = "Dialog Example.txt"
 IMG_FOLDER = "Ai_Pictures"
 
+# MODEL CONFIGURATION
+MODEL_ID = "openai/gpt-oss-120b" # WARNING: This requires massive hardware
+
 if not os.path.exists(IMG_FOLDER): os.makedirs(IMG_FOLDER)
 
-# --- 2. EVOLVING NEURAL ARCHITECTURE ---
+# --- 2. HEAVY MODEL LOADER (CACHED) ---
+@st.cache_resource
+def load_llm():
+    """
+    Loads the massive model only ONCE. 
+    Using cache_resource prevents reloading it on every message (which would take forever).
+    """
+    print(f"🔄 Loading {MODEL_ID}... This may take a while.")
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+        # device_map="auto" tries to spread the model across all available GPUs
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_ID, 
+            device_map="auto", 
+            torch_dtype=torch.float16 # Use float16 to save memory
+        )
+        print("✅ Model Loaded Successfully")
+        return tokenizer, model
+    except Exception as e:
+        st.error(f"Failed to load model: {e}")
+        return None, None
+
+# --- 3. EVOLVING NEURAL ARCHITECTURE ---
 class OrganicBrain(nn.Module):
     def __init__(self, input_size=12, hidden_size=16, output_size=6):
         super(OrganicBrain, self).__init__()
@@ -28,7 +54,6 @@ class OrganicBrain(nn.Module):
         self.hidden_size = hidden_size
         self.output_size = output_size
         
-        # Layers
         self.layer1 = nn.Linear(input_size, hidden_size)
         self.layer2 = nn.Linear(hidden_size, hidden_size)
         self.layer3 = nn.Linear(hidden_size, output_size)
@@ -41,27 +66,21 @@ class OrganicBrain(nn.Module):
         return x
 
     def grow_brain(self):
-        """Adds 'Transformers' (Neuronal Capacity) to the hidden layers."""
         old_hidden = self.hidden_size
         new_hidden = old_hidden + 4 
         
-        # Create larger layers
         new_l1 = nn.Linear(self.input_size, new_hidden)
         new_l2 = nn.Linear(new_hidden, new_hidden)
         new_l3 = nn.Linear(new_hidden, self.output_size)
         
-        # Preserve old knowledge (Copy weights)
         with torch.no_grad():
             new_l1.weight[:old_hidden, :] = self.layer1.weight
             new_l1.bias[:old_hidden] = self.layer1.bias
-            
             new_l2.weight[:old_hidden, :old_hidden] = self.layer2.weight
             new_l2.bias[:old_hidden] = self.layer2.bias
-            
             new_l3.weight[:, :old_hidden] = self.layer3.weight
             new_l3.bias[:] = self.layer3.bias
 
-        # Replace layers
         self.layer1 = new_l1
         self.layer2 = new_l2
         self.layer3 = new_l3
@@ -69,10 +88,9 @@ class OrganicBrain(nn.Module):
         
         return f"Neural Architecture Expanded: {old_hidden} -> {new_hidden} Hidden Nodes"
 
-# --- 3. SENSORY INPUT ---
+# --- 4. SENSORY INPUT ---
 def extract_sensory_data(text):
     text = text.lower()
-    
     joy_set = {"happy", "good", "great", "calm", "centered", "content", "peaceful", "serene", "bliss", "ecstatic", "thrilled", "radiant", "playful", "passionate", "alive", "grateful", "excited", "inspired", "confident", "safe", "optimistic"}
     sad_set = {"sad", "bad", "depressed", "grief", "despair", "hopeless", "lonely", "isolated", "empty", "exhausted", "weary", "broken", "heartbroken", "gloomy", "miserable", "hurt", "disappointed", "sorrow", "blue"}
     anger_set = {"angry", "mad", "hate", "furious", "irate", "annoyed", "irritated", "agitated", "bitter", "resentful", "hostile", "pissed", "rage", "frustrated", "disgusted", "contempt", "cranky", "upset", "vindictive"}
@@ -95,7 +113,7 @@ def extract_sensory_data(text):
     ]
     return torch.tensor(vec)
 
-# --- 4. IMAGE GENERATOR ---
+# --- 5. IMAGE GENERATOR ---
 def generate_image(prompt):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{IMG_FOLDER}/marin_gen_{timestamp}.png"
@@ -107,9 +125,8 @@ def generate_image(prompt):
     img.save(filename)
     return filename
 
-# --- 5. INTERACTIVE STICKY HUD ---
+# --- 6. INTERACTIVE STICKY HUD ---
 def draw_hud(inputs, traits, brain):
-    # Get custom settings or defaults
     node_color = st.session_state.settings.get("node_color", "#E91E63")
     node_size = st.session_state.settings.get("node_size", 8)
     
@@ -132,8 +149,6 @@ def draw_hud(inputs, traits, brain):
     with st.container():
         st.caption("🧠 NEURAL DIAGNOSTICS (Hover for Zoom/Full Screen)")
         c1, c2, c3 = st.columns([1.5, 1, 1])
-        
-        # 1. Neural Net
         with c1:
             hidden_count = brain.hidden_size
             layers = [12, hidden_count, hidden_count, 6]
@@ -152,25 +167,21 @@ def draw_hud(inputs, traits, brain):
             fig.update_layout(title=f"Network ({hidden_count} Nodes)", height=150, margin=dict(l=0,r=0,t=30,b=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis=dict(visible=False), yaxis=dict(visible=False))
             st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True, 'scrollZoom': True})
 
-        # 2. Input Radar
         with c2:
             cats = ['Joy', 'Sadness', 'Anger', 'Fear', 'Shame', 'Love']
             fig = go.Figure(go.Scatterpolar(r=inputs[:6], theta=cats, fill='toself', line=dict(color='#00FF99'), fillcolor='rgba(0,255,153,0.3)'))
             fig.update_layout(title="Sensory Input", height=150, margin=dict(l=25,r=25,t=30,b=20), polar=dict(radialaxis=dict(visible=False, range=[0,1]), bgcolor='rgba(0,0,0,0)'), paper_bgcolor='rgba(0,0,0,0)')
             st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True})
 
-        # 3. Output Radar
         with c3:
             cats = ['Energy', 'Openness', 'Empathy', 'Attraction', 'Anxiety', 'Mood']
             fig = go.Figure(go.Scatterpolar(r=traits, theta=cats, fill='toself', line=dict(color='#FF69B4'), fillcolor='rgba(255,105,180,0.3)'))
             fig.update_layout(title="Brain State", height=150, margin=dict(l=25,r=25,t=30,b=20), polar=dict(radialaxis=dict(visible=False, range=[0,1]), bgcolor='rgba(0,0,0,0)'), paper_bgcolor='rgba(0,0,0,0)')
             st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True})
-        
         st.divider()
 
-# --- 6. SYSTEM OPS (FIXED CRASH) ---
+# --- 7. SYSTEM OPS ---
 def save_system():
-    # Fix: Ensure types are lists before saving to JSON to prevent AttributeError
     if isinstance(st.session_state.last_inputs, (torch.Tensor, np.ndarray)):
         input_list = st.session_state.last_inputs.tolist()
     else:
@@ -200,8 +211,6 @@ def load_system():
             st.session_state.traits = data.get("traits", [0.5]*6)
             st.session_state.last_inputs = data.get("last_inputs", [0.0]*12)
             st.session_state.density = data.get("density", 0.0)
-            
-            # Load Settings
             saved_settings = data.get("settings", {})
             st.session_state.settings.update(saved_settings)
             
@@ -222,7 +231,7 @@ def load_text_files():
         with open(DIALOG_FILE, "r", encoding="utf-8") as f: d = f.read()
     return p, d
 
-# --- 7. INITIALIZATION ---
+# --- 8. INITIALIZATION ---
 if 'initialized' not in st.session_state:
     st.session_state.brain = OrganicBrain()
     st.session_state.traits = [0.5]*6
@@ -232,32 +241,32 @@ if 'initialized' not in st.session_state:
     st.session_state.notifications = []
     st.session_state.show_diagnostics = True 
     
-    # DEFAULT SETTINGS
     st.session_state.settings = {
         "learning_rate": 0.05,
         "img_gen": True,
         "response_len": "Short & Punchy",
         "status_text": "Marin is thinking...",
-        "node_color": "#E91E63", # Default Marin Pink
+        "node_color": "#E91E63",
         "node_size": 8
     }
     
     load_system()
     st.session_state.optimizer = optim.Adam(st.session_state.brain.parameters(), lr=st.session_state.settings["learning_rate"])
     
+    # LOAD LLM ON STARTUP
+    st.session_state.tokenizer, st.session_state.model = load_llm()
+    
     st.session_state.initialized = True
     st.session_state.processing = False
 
-# --- 8. UI RENDER ---
-st.set_page_config(page_title="Marin OS 5.1", layout="wide")
+# --- 9. UI RENDER ---
+st.set_page_config(page_title="Marin OS 6.0", layout="wide")
 st.markdown("<style>.stApp { background-color: #0E0E0E; color: #E0E0E0; } .stButton>button { border: 1px solid #FF69B4; color: #FF69B4; width: 100%; }</style>", unsafe_allow_html=True)
 
-# SIDEBAR
 with st.sidebar:
     st.title("Settings")
     if st.button("Toggle Diagnostics HUD"):
         st.session_state.show_diagnostics = not st.session_state.show_diagnostics
-    
     st.divider()
     if st.button("⚠️ Factory Reset"):
         if os.path.exists(MEMORY_FILE): os.remove(MEMORY_FILE)
@@ -265,15 +274,10 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-# TABS
 tab1, tab2 = st.tabs(["💬 Terminal Link", "⚙️ System Settings"])
 
-# --- TAB 2: SETTINGS ---
 with tab2:
     st.header("Neural Configuration")
-    
-    # Visual Interface (NEW)
-    st.subheader("Visual Interface")
     col_c, col_s = st.columns(2)
     with col_c:
         new_color = st.color_picker("Neural Node Color", st.session_state.settings["node_color"])
@@ -289,10 +293,8 @@ with tab2:
             st.rerun()
 
     st.divider()
-    
-    # Logic Settings
     st.subheader("Logic Core")
-    new_lr = st.slider("Neuroplasticity Rate (Learning Speed)", 0.01, 0.50, st.session_state.settings["learning_rate"])
+    new_lr = st.slider("Neuroplasticity Rate", 0.01, 0.50, st.session_state.settings["learning_rate"])
     if new_lr != st.session_state.settings["learning_rate"]:
         st.session_state.settings["learning_rate"] = new_lr
         st.session_state.optimizer = optim.Adam(st.session_state.brain.parameters(), lr=new_lr)
@@ -313,7 +315,6 @@ with tab2:
         st.session_state.settings["status_text"] = new_status
         save_system()
 
-# --- TAB 1: CHAT ---
 with tab1:
     if st.session_state.show_diagnostics:
         draw_hud(st.session_state.last_inputs, st.session_state.traits, st.session_state.brain)
@@ -367,7 +368,7 @@ with tab1:
             loss.backward(); st.session_state.optimizer.step()
             st.session_state.traits = pred.detach().numpy()
             
-            # 5. Generate
+            # 5. GENERATE RESPONSE (TRANSFORMERS REPLACEMENT)
             p_txt, d_txt = load_text_files()
             t = st.session_state.traits
             
@@ -387,18 +388,42 @@ with tab1:
             """
             
             try:
-                msgs = [{'role':'system', 'content':prompt_txt}] + st.session_state.messages[-10:]
-                res = ollama.chat(model='llama3:8b', messages=msgs)
-                
-                final = res['message']['content']
-                if st.session_state.settings["img_gen"]:
-                    match = re.search(r'\[IMG: (.*?)\]', final, re.IGNORECASE)
-                    if match:
-                        img_path = generate_image(match.group(1))
-                        final = final.replace(match.group(0), "") + f"[[IMG_PATH:{img_path}]]"
+                # REPLACED OLLAMA WITH HUGGING FACE TRANSFORMERS LOGIC
+                if st.session_state.model is not None and st.session_state.tokenizer is not None:
+                    # Construct message list for template
+                    msgs = [{'role':'system', 'content':prompt_txt}] + st.session_state.messages[-10:]
                     
-                st.session_state.messages.append({"role": "assistant", "content": final})
-                save_system()
+                    # Apply template
+                    inputs = st.session_state.tokenizer.apply_chat_template(
+                        msgs, 
+                        add_generation_prompt=True, 
+                        return_tensors="pt"
+                    ).to(st.session_state.model.device)
+                    
+                    # Generate
+                    outputs = st.session_state.model.generate(
+                        **inputs, 
+                        max_new_tokens=150,
+                        do_sample=True,
+                        temperature=0.7
+                    )
+                    
+                    # Decode
+                    final_raw = st.session_state.tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1]:], skip_special_tokens=True)
+                    
+                    # Image Handling
+                    final = final_raw
+                    if st.session_state.settings["img_gen"]:
+                        match = re.search(r'\[IMG: (.*?)\]', final, re.IGNORECASE)
+                        if match:
+                            img_path = generate_image(match.group(1))
+                            final = final.replace(match.group(0), "") + f"[[IMG_PATH:{img_path}]]"
+                        
+                    st.session_state.messages.append({"role": "assistant", "content": final})
+                    save_system()
+                else:
+                    st.error("Model not loaded. Cannot generate response.")
+                    
             except Exception as e: st.error(f"Error: {e}")
             
         st.session_state.processing = False
