@@ -6,3 +6,4 @@ ollama
 Pillow
 transformers
 accelerate
+openai
