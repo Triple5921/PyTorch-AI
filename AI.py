@@ -11,12 +11,18 @@ from datetime import datetime
 from PIL import Image, ImageDraw
 from huggingface_hub import InferenceClient
 
-# Try to import ollama (might not exist on cloud, that's okay)
+# Optional Imports (Handle missing libraries gracefully)
 try:
     import ollama
     OLLAMA_AVAILABLE = True
 except ImportError:
     OLLAMA_AVAILABLE = False
+
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
 
 # --- 1. CONFIGURATION ---
 MEMORY_FILE = "marin_organic_mem.json"
@@ -24,14 +30,6 @@ BRAIN_FILE = "marin_organic_brain.pth"
 PERSONALITY_FILE = "Personality.txt"
 DIALOG_FILE = "Dialog Example.txt"
 IMG_FOLDER = "Ai_Pictures"
-
-# API CONFIGURATION (Safe Load)
-try:
-    HF_TOKEN = st.secrets["HF_TOKEN"]
-except Exception:
-    HF_TOKEN = None
-
-REPO_ID = "mistralai/Mistral-7B-Instruct-v0.3"
 
 if not os.path.exists(IMG_FOLDER): os.makedirs(IMG_FOLDER)
 
@@ -187,24 +185,37 @@ if 'initialized' not in st.session_state:
     st.session_state.processing = False
 
 # --- 8. UI RENDER ---
-st.set_page_config(page_title="Marin OS 8.0", layout="wide")
+st.set_page_config(page_title="Marin OS 9.0", layout="wide")
 st.markdown("<style>.stApp { background-color: #0E0E0E; color: #E0E0E0; } .stButton>button { border: 1px solid #FF69B4; color: #FF69B4; width: 100%; }</style>", unsafe_allow_html=True)
 
 with st.sidebar:
     st.title("Settings")
     
-    # BACKEND SELECTOR
+    # --- UNIVERSAL BACKEND SELECTOR ---
     backend_options = ["Cloud API (HuggingFace)"]
+    if OPENAI_AVAILABLE: backend_options.insert(0, "OpenAI (GPT-4o)")
     if OLLAMA_AVAILABLE: backend_options.append("Local Brain (Ollama)")
     
     backend_choice = st.radio("AI Backend:", backend_options, index=0)
     st.session_state.settings["backend"] = backend_choice
     
-    if backend_choice == "Cloud API (HuggingFace)":
-        if not HF_TOKEN:
-            st.warning("⚠️ No API Token found!")
-            st.markdown("[Get Free Token](https://huggingface.co/settings/tokens)")
-            st.text_input("Or Enter Token Here:", key="manual_token", type="password")
+    # --- DYNAMIC TOKEN INPUT ---
+    if "OpenAI" in backend_choice:
+        openai_key = st.text_input("Enter OpenAI Key (sk-...):", type="password", key="openai_key_input")
+        if openai_key:
+            st.session_state["openai_key"] = openai_key
+            st.success("✅ OpenAI Key Active")
+    
+    elif "HuggingFace" in backend_choice:
+        # Check secrets first, then manual input
+        try:
+            hf_secret = st.secrets["HF_TOKEN"]
+            st.success("✅ HF Key found in Secrets")
+        except:
+            hf_key = st.text_input("Enter Hugging Face Token (hf_...):", type="password", key="hf_key_input")
+            if hf_key:
+                st.session_state["hf_key"] = hf_key
+                st.success("✅ HF Key Active")
     
     if st.button("Toggle Diagnostics HUD"): st.session_state.show_diagnostics = not st.session_state.show_diagnostics
     if st.button("Toggle Inner Monologue"): st.session_state.show_thoughts = not st.session_state.show_thoughts
@@ -244,7 +255,6 @@ with tab1:
         for note in st.session_state.notifications: st.success(note)
         st.session_state.notifications = []
     
-    # SPLIT SCREEN
     if st.session_state.show_thoughts:
         chat_col, thought_col = st.columns([1.5, 1])
         with chat_col: st.caption("💬 Conversation")
@@ -275,10 +285,8 @@ with tab1:
         st.rerun()
 
     if st.session_state.processing:
-        active_token = HF_TOKEN if HF_TOKEN else st.session_state.get("manual_token")
-        
         with st.spinner(st.session_state.settings["status_text"]):
-            # 1. Analyze & 2. Neuroplasticity & 3. Forward & 4. Target
+            # 1. Analyze & Brain Work
             inputs = extract_sensory_data(st.session_state.messages[-1]['content'])
             st.session_state.last_inputs = inputs 
             complexity = torch.mean(inputs).item()
@@ -319,21 +327,40 @@ with tab1:
             
             try:
                 response = ""
-                
-                # --- OPTION A: CLOUD API ---
-                if st.session_state.settings["backend"] == "Cloud API (HuggingFace)":
-                    if active_token:
-                        client = InferenceClient(token=active_token)
-                        msgs = [{'role':'system', 'content':system_prompt}] + st.session_state.messages[-10:]
-                        for token in client.chat_completion(messages=msgs, model=REPO_ID, max_tokens=250, stream=True):
-                            response += token.choices[0].delta.content or ""
-                    else:
-                        st.error("Missing API Token for Cloud Mode.")
-                        st.session_state.processing = False
+                backend = st.session_state.settings["backend"]
+
+                # --- OPTION A: OPENAI (NEW) ---
+                if "OpenAI" in backend:
+                    key = st.session_state.get("openai_key")
+                    if not key:
+                         st.error("Missing OpenAI Key!")
+                         st.stop()
+                    
+                    client = OpenAI(api_key=key)
+                    msgs = [{'role':'system', 'content':system_prompt}] + st.session_state.messages[-10:]
+                    completion = client.chat.completions.create(
+                        model="gpt-4o-mini", # Good balance of cost/speed
+                        messages=msgs
+                    )
+                    response = completion.choices[0].message.content
+
+                # --- OPTION B: CLOUD API (HF) ---
+                elif "HuggingFace" in backend:
+                    # Try secrets, then manual
+                    try: token = st.secrets["HF_TOKEN"]
+                    except: token = st.session_state.get("hf_key")
+                    
+                    if not token:
+                        st.error("Missing HuggingFace Token!")
                         st.stop()
+                        
+                    client = InferenceClient(token=token)
+                    msgs = [{'role':'system', 'content':system_prompt}] + st.session_state.messages[-10:]
+                    for t in client.chat_completion(messages=msgs, model="mistralai/Mistral-7B-Instruct-v0.3", max_tokens=250, stream=True):
+                        response += t.choices[0].delta.content or ""
                 
-                # --- OPTION B: LOCAL OLLAMA ---
-                elif st.session_state.settings["backend"] == "Local Brain (Ollama)":
+                # --- OPTION C: LOCAL OLLAMA ---
+                elif "Ollama" in backend:
                     msgs = [{'role':'system', 'content':system_prompt}] + st.session_state.messages[-10:]
                     res = ollama.chat(model='llama3:8b', messages=msgs)
                     response = res['message']['content']
